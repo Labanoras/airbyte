@@ -141,7 +141,7 @@ def test_products_report_stream(test_config):
     profiles = make_profiles(profile_type="vendor")
 
     stream = SponsoredProductsReportStream(config, profiles, authenticator=mock.MagicMock())
-    stream_slice = {"reportDate": "20210725"}
+    stream_slice = {"reportDate": "20210725", "retry_count": 3}
     metrics = [m for m in stream.read_records(SyncMode.incremental, stream_slice=stream_slice)]
     assert len(metrics) == METRICS_COUNT * len(stream.metrics_map)
 
@@ -252,12 +252,17 @@ def test_display_report_stream_timeout(mocker, test_config):
             count: int = 0
 
             def __call__(self, request):
+                print("call", request)
                 self.count += 1
                 response = REPORT_STATUS_RESPONSE
                 if self.count > success_cnt:
                     response = REPORT_STATUS_RESPONSE.replace("SUCCESS", "IN_PROGRESS")
                 if self.count > success_cnt + 1:
                     frozen_time.move_to("2021-07-30 06:26:08")
+                if self.count > success_cnt + 4:
+                    frozen_time.move_to("2021-07-30 08:26:08")
+                if self.count > success_cnt + 7:
+                    frozen_time.move_to("2021-07-30 10:26:08")
                 return (200, {}, response)
 
         responses.add_callback(
@@ -266,10 +271,12 @@ def test_display_report_stream_timeout(mocker, test_config):
         config = AmazonAdsConfig(**test_config)
         profiles = make_profiles()
         stream = SponsoredDisplayReportStream(config, profiles, authenticator=mock.MagicMock())
-        stream_slice = {"reportDate": "20210725"}
+        stream_slice = {"reportDate": "20210725", "retry_count": 3}
 
-        with pytest.raises(Exception):
-            _ = [m for m in stream.read_records(SyncMode.incremental, stream_slice=stream_slice)]
+        list([m for m in stream.read_records(SyncMode.incremental, stream_slice=stream_slice)])
+
+        # with pytest.raises(Exception):
+        #     _ = [m for m in stream.read_records(SyncMode.incremental, stream_slice=stream_slice)]
         time_mock.assert_called_with(30)
 
 

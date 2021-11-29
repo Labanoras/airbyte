@@ -71,6 +71,7 @@ class ReportStream(BasicAmazonAdsStream, ABC):
     """
 
     primary_key = None
+    RETRY_COUNT = 3
     CHECK_INTERVAL_SECONDS = 30
     # Amazon ads updates the data for the next 3 days
     LOOK_BACK_WINDOW = 3
@@ -118,8 +119,25 @@ class ReportStream(BasicAmazonAdsStream, ABC):
             # take any action and just return.
             return
         report_date = stream_slice[self.cursor_field]
+        retry_count = stream_slice["retry_count"]
         report_infos = self._init_reports(report_date)
         logger.info(f"Waiting for {len(report_infos)} report(s) to be generated")
+
+        while retry_count > 0 and len(report_infos) > 0:
+            print("call _try_read_records", retry_count, len(report_infos))
+            retry_count -= 1
+            yield from self._try_read_records(report_infos, report_date)
+
+            if not report_infos:
+                logger.info("All reports have been processed")
+            else:
+                logger.info("Retrying timed out reports")
+
+        if report_infos:
+            print("raise")
+            raise Exception(f"Not all reports have been processed due to timeout after {self.RETRY_COUNT} retries")
+
+    def _try_read_records(self, report_infos, report_date):
         # According to Amazon Ads API docs metric generation takes maximum 15
         # minutes. But in case reports wont be generated we dont want this stream to
         # hung forever. Store timepoint when report generation has started to
@@ -147,10 +165,6 @@ class ReportStream(BasicAmazonAdsStream, ABC):
             if report_infos:
                 logger.info(f"{len(report_infos)} report(s) remained, taking {self.CHECK_INTERVAL_SECONDS} seconds timeout")
                 time.sleep(self.CHECK_INTERVAL_SECONDS)
-        if not report_infos:
-            logger.info("All reports have been processed")
-        else:
-            raise Exception("Not all reports has been processed due to timeout")
 
     def _generate_model(self):
         """
@@ -254,7 +268,10 @@ class ReportStream(BasicAmazonAdsStream, ABC):
             else:
                 start_date = self._start_date
 
-        return [{self.cursor_field: date} for date in ReportStream.get_report_date_ranges(start_date)] or [None]
+        return [{
+            self.cursor_field: date,
+            "retry_count": self.RETRY_COUNT,
+        } for date in ReportStream.get_report_date_ranges(start_date)] or [None]
 
     def get_updated_state(self, current_stream_state: Dict[str, Any], latest_data: Mapping[str, Any]) -> Mapping[str, Any]:
         return {"reportDate": latest_data["reportDate"]}

@@ -1,0 +1,15 @@
+File "/airbyte/integration_code/source_amazon_ads/streams/report_streams/report_streams.py", line 134, in read_records
+    raise Exception(f"Report for {report_info.profile_id} with {report_info.record_type} type generation failed")
+Exception: Report for 231680064813834 with adGroups type generation failed
+
+File "/airbyte/integration_code/source_amazon_ads/streams/report_streams/report_streams.py", line 153, in read_records
+    raise Exception("Not all reports has been processed due to timeout")
+Exception: Not all reports has been processed due to timeout
+
+File "/airbyte/integration_code/source_amazon_ads/streams/report_streams/report_streams.py", line 296, in _init_reports
+    f"Unexpected error when registering {record_type}, {self.__class__.__name__} for {profile.profileId} profile: {response.text}"
+Exception: Unexpected error when registering asins, SponsoredDisplayReportStream for 669292571922708 profile: {"code":"500","details":"Internal Server Error","requestId":"08EEFAAPEH4EHN9KPKEZ"}
+
+File "/airbyte/integration_code/source_amazon_ads/streams/report_streams/report_streams.py", line 296, in _init_reports
+    f"Unexpected error when registering {record_type}, {self.__class__.__name__} for {profile.profileId} profile: {response.text}"
+Exception: Unexpected error when registering campaigns, SponsoredDisplayReportStream for 156185076850050 profile: { "code": "400", "details": "Tactic T00020 is not supported for report API in marketplace A2NODRKZP88ZB9.", "requestId": "Q4D289KV8D9RQHPN7Q28" }
