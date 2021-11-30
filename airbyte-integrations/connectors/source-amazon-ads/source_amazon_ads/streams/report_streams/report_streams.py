@@ -57,6 +57,16 @@ class ReportInfo:
     report_id: str
     profile_id: int
     record_type: str
+    status: Status
+    metric_objects: List[dict]
+
+
+class ReportGenerationFailure(Exception):
+    pass
+
+
+class ReportGenerationInProgress(Exception):
+    pass
 
 
 class TooManyRequests(Exception):
@@ -71,7 +81,6 @@ class ReportStream(BasicAmazonAdsStream, ABC):
     """
 
     primary_key = None
-    RETRY_COUNT = 3
     CHECK_INTERVAL_SECONDS = 30
     # Amazon ads updates the data for the next 3 days
     LOOK_BACK_WINDOW = 3
@@ -119,52 +128,49 @@ class ReportStream(BasicAmazonAdsStream, ABC):
             # take any action and just return.
             return
         report_date = stream_slice[self.cursor_field]
-        retry_count = stream_slice["retry_count"]
         report_infos = self._init_reports(report_date)
         logger.info(f"Waiting for {len(report_infos)} report(s) to be generated")
 
-        while retry_count > 0 and len(report_infos) > 0:
-            print("call _try_read_records", retry_count, len(report_infos))
-            retry_count -= 1
-            yield from self._try_read_records(report_infos, report_date)
+        self._try_read_records(report_infos)
 
-            if not report_infos:
-                logger.info("All reports have been processed")
-            else:
-                logger.info("Retrying timed out reports")
+        for report_info in report_infos:
+            for metric_object in report_info.metric_objects:
+                yield self._model(
+                    profileId=report_info.profile_id,
+                    recordType=report_info.record_type,
+                    reportDate=report_date,
+                    metric=metric_object,
+                ).dict()
 
-        if report_infos:
-            print("raise")
-            raise Exception(f"Not all reports have been processed due to timeout after {self.RETRY_COUNT} retries")
 
-    def _try_read_records(self, report_infos, report_date):
-        # According to Amazon Ads API docs metric generation takes maximum 15
-        # minutes. But in case reports wont be generated we dont want this stream to
-        # hung forever. Store timepoint when report generation has started to
-        # check if it takes to long to break a loop.
-        start_time_point = datetime.now()
-        while report_infos and datetime.now() <= start_time_point + self.REPORT_WAIT_TIMEOUT:
-            completed_reports = []
-            logger.info(f"Checking report status, {len(report_infos)} report(s) remained")
-            for report_info in report_infos:
-                report_status, download_url = self._check_status(report_info)
-                if report_status == Status.FAILURE:
-                    raise Exception(f"Report for {report_info.profile_id} with {report_info.record_type} type generation failed")
-                elif report_status == Status.SUCCESS:
-                    metric_objects = self._download_report(report_info, download_url)
-                    for metric_object in metric_objects:
-                        yield self._model(
-                            profileId=report_info.profile_id,
-                            recordType=report_info.record_type,
-                            reportDate=report_date,
-                            metric=metric_object,
-                        ).dict()
-                    completed_reports.append(report_info)
-            for completed_report in completed_reports:
-                report_infos.remove(completed_report)
-            if report_infos:
-                logger.info(f"{len(report_infos)} report(s) remained, taking {self.CHECK_INTERVAL_SECONDS} seconds timeout")
-                time.sleep(self.CHECK_INTERVAL_SECONDS)
+    @backoff.on_exception(
+        backoff.constant,
+        (ReportGenerationFailure, ReportGenerationInProgress),
+        # max_tries=5,
+        max_time=timedelta(seconds=10).total_seconds,
+    )
+    def _try_read_records(self, report_infos):
+        incomplete_report_infos = [r for r in report_infos if r.status != Status.SUCCESS]
+        completed_reports = 0
+
+        logger.info(f"Checking report status, {len(incomplete_report_infos)} report(s) remained")
+        for report_info in incomplete_report_infos:
+            report_status, download_url = self._check_status(report_info)
+            report_info.status = report_status
+
+            if report_status == Status.FAILURE:
+                message = f"Report for {report_info.profile_id} with {report_info.record_type} type generation failed"
+                logger.info(message)
+                raise ReportGenerationFailure(message)
+            elif report_status == Status.SUCCESS:
+                report_info.metric_objects = self._download_report(report_info, download_url)
+                completed_reports += 1
+
+        incomplete_count = len(incomplete_report_infos) - completed_reports
+        if incomplete_count > 0:
+            message = f"{incomplete_count} report(s) remained"
+            logger.info(message)
+            raise ReportGenerationInProgress(message)
 
     def _generate_model(self):
         """
